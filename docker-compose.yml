@@ -1,0 +1,96 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────
+# IOC Harvester — Docker Compose
+#
+# Modes:
+#   One-shot:   docker compose run --rm ioc-harvester
+#   Scheduled:  docker compose up -d   (runs via cron container)
+# ─────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Primary harvester service ───────────────────────────────
+  ioc-harvester:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: ioc-harvester:latest
+    container_name: ioc_harvester
+    restart: "no"   # one-shot; use 'scheduler' service for cron
+
+    environment:
+      # AlienVault OTX
+      OTX_API_KEY: ${OTX_API_KEY:-}
+      OTX_DAYS_BACK: ${OTX_DAYS_BACK:-7}
+      OTX_ENABLED: ${OTX_ENABLED:-true}
+
+      # ThreatFox
+      THREATFOX_API_KEY: ${THREATFOX_API_KEY:-}
+      THREATFOX_DAYS: ${THREATFOX_DAYS:-3}
+      THREATFOX_ENABLED: ${THREATFOX_ENABLED:-true}
+
+      # Abuse.ch
+      ABUSECH_ENABLED: ${ABUSECH_ENABLED:-true}
+      URLHAUS_ENABLED: ${URLHAUS_ENABLED:-true}
+      BAZAAR_ENABLED: ${BAZAAR_ENABLED:-true}
+
+      # Output
+      OUTPUT_DIR: /app/output
+      OUTPUT_CSV: ${OUTPUT_CSV:-true}
+      OUTPUT_SIGMA: ${OUTPUT_SIGMA:-true}
+      OUTPUT_FIREWALL: ${OUTPUT_FIREWALL:-true}
+
+      # General
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MAX_IOCS: ${MAX_IOCS:-}
+
+    volumes:
+      - ./output:/app/output          # local ./output → container /app/output
+      - ./config.yml:/app/config.yml:ro  # optional config override
+
+    networks:
+      - ioc_net
+
+    security_opt:
+      - no-new-privileges:true
+
+    read_only: false   # needs write to /app/output
+    tmpfs:
+      - /tmp
+
+  # ── Scheduled harvester (cron via supercronic) ──────────────
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler   # separate scheduler image
+    image: ioc-harvester-scheduler:latest
+    container_name: ioc_harvester_scheduler
+    restart: unless-stopped
+    profiles:
+      - scheduled                        # only starts with --profile scheduled
+
+    environment:
+      CRON_SCHEDULE: ${CRON_SCHEDULE:-0 */6 * * *}  # every 6 hours
+      OTX_API_KEY: ${OTX_API_KEY:-}
+      THREATFOX_API_KEY: ${THREATFOX_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    volumes:
+      - ./output:/app/output
+      - ./config.yml:/app/config.yml:ro
+
+    networks:
+      - ioc_net
+
+    depends_on:
+      - ioc-harvester
+
+networks:
+  ioc_net:
+    driver: bridge
+
+volumes:
+  output_data:
+    driver: local
